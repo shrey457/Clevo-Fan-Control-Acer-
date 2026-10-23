@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Fan Control
+Comment=Thermal & Fan Control Utility
+Exec=fan-gui
+Icon=fan-control
+Terminal=false
+Categories=System;HardwareSettings;Settings;
+StartupNotify=true
