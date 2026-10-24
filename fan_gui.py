@@ -112,6 +112,19 @@ def _resolve_cli_path() -> pathlib.Path:
 CLI_PATH = _resolve_cli_path()
 
 
+def is_kernel_locked_down() -> bool:
+    """Check if Linux Kernel Lockdown is active (e.g. from UEFI Secure Boot)."""
+    try:
+        p = pathlib.Path("/sys/kernel/security/lockdown")
+        if p.is_file():
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            if "[integrity]" in content or "[confidentiality]" in content:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def find_app_icon() -> QIcon:
     """Finds the high-resolution app icon across local and system paths."""
     icon = QIcon()
@@ -440,6 +453,8 @@ class ECBackend:
         return False
 
     def _run_privileged(self, cmd: list[str]) -> bool:
+        if is_kernel_locked_down():
+            return False
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
             if p.returncode == 0:
@@ -1023,13 +1038,20 @@ class FanControlMainWindow(QMainWindow):
 
         top_bar.addStretch()
 
-        self.elevate_btn = QPushButton("Unlock Control")
-        self.elevate_btn.clicked.connect(self._on_elevate_clicked)
-        if self.backend.has_direct_io:
-            self.elevate_btn.setVisible(False)
-        top_bar.addWidget(self.elevate_btn)
+        if is_kernel_locked_down():
+            self.elevate_btn = QPushButton("Secure Boot Guide")
+            self.elevate_btn.setToolTip("Click for instructions to unlock fan control in UEFI BIOS")
+            self.elevate_btn.clicked.connect(self._on_elevate_clicked)
+            top_bar.addWidget(self.elevate_btn)
+            self.status_badge = QLabel("🔒 Secure Boot Active")
+        else:
+            self.elevate_btn = QPushButton("Unlock Control")
+            self.elevate_btn.clicked.connect(self._on_elevate_clicked)
+            if self.backend.has_direct_io:
+                self.elevate_btn.setVisible(False)
+            top_bar.addWidget(self.elevate_btn)
+            self.status_badge = QLabel("● Connected" if self.backend.has_direct_io else "⚠ Sensor Readout")
 
-        self.status_badge = QLabel("● Connected" if self.backend.has_direct_io else "⚠ Sensor Readout")
         b_font = QFont(self.font())
         b_font.setPointSize(max(7, b_font.pointSize() - 2))
         b_font.setBold(True)
@@ -1080,10 +1102,10 @@ class FanControlMainWindow(QMainWindow):
         self.btn_mode_quiet = ModeButton("Quiet Mode", "Silent Zero RPM (0%)", "🌙")
         self.btn_mode_custom = ModeButton("Custom", "Manual Sliders & Profiles", "🎛️")
 
-        self.btn_mode_auto.clicked.connect(lambda: self.select_mode("auto"))
-        self.btn_mode_max.clicked.connect(lambda: self.select_mode("max"))
-        self.btn_mode_quiet.clicked.connect(lambda: self.select_mode("quiet"))
-        self.btn_mode_custom.clicked.connect(lambda: self.select_mode("custom"))
+        self.btn_mode_auto.clicked.connect(lambda: self.select_mode("auto", user_initiated=True))
+        self.btn_mode_max.clicked.connect(lambda: self.select_mode("max", user_initiated=True))
+        self.btn_mode_quiet.clicked.connect(lambda: self.select_mode("quiet", user_initiated=True))
+        self.btn_mode_custom.clicked.connect(lambda: self.select_mode("custom", user_initiated=True))
 
         modes_grid.addWidget(self.btn_mode_auto, 0, 0)
         modes_grid.addWidget(self.btn_mode_max, 0, 1)
@@ -1237,14 +1259,23 @@ class FanControlMainWindow(QMainWindow):
                 "color: #10b981; background-color: rgba(16, 185, 129, 0.15); "
                 "padding: 3px 8px; border-radius: 4px; font-weight: bold;"
             )
+        elif is_kernel_locked_down():
+            self.status_badge.setStyleSheet(
+                "color: #f87171; background-color: rgba(239, 68, 68, 0.18); "
+                "padding: 3px 8px; border-radius: 4px; font-weight: bold;"
+            )
         else:
             self.status_badge.setStyleSheet(
                 "color: #f59e0b; background-color: rgba(245, 158, 11, 0.15); "
                 "padding: 3px 8px; border-radius: 4px; font-weight: bold;"
             )
 
-    def select_mode(self, mode: str):
+    def select_mode(self, mode: str, user_initiated: bool = False):
         """Switches between Automatic, Maximum, Quiet, and Custom."""
+        if user_initiated and not self.backend.has_direct_io and is_kernel_locked_down():
+            self._on_elevate_clicked()
+            return
+
         self.current_mode = mode
 
         self.btn_mode_auto.set_active(mode == "auto")
@@ -1297,6 +1328,9 @@ class FanControlMainWindow(QMainWindow):
             self.backend.set_fan(0, val)
 
     def _set_custom_speed(self, pct: int):
+        if not self.backend.has_direct_io and is_kernel_locked_down():
+            self._on_elevate_clicked()
+            return
         self.slider_f1.setValue(pct)
         self.slider_f2.setValue(pct)
         self.backend.set_fan(0, pct)
@@ -1313,19 +1347,19 @@ class FanControlMainWindow(QMainWindow):
 
         menu.addSeparator()
         m_auto = QAction("Automatic (EC Firmware)", self)
-        m_auto.triggered.connect(lambda: self.select_mode("auto"))
+        m_auto.triggered.connect(lambda: self.select_mode("auto", user_initiated=True))
         menu.addAction(m_auto)
 
         m_max = QAction("Maximum (100%)", self)
-        m_max.triggered.connect(lambda: self.select_mode("max"))
+        m_max.triggered.connect(lambda: self.select_mode("max", user_initiated=True))
         menu.addAction(m_max)
 
         m_quiet = QAction("Quiet Mode (0%)", self)
-        m_quiet.triggered.connect(lambda: self.select_mode("quiet"))
+        m_quiet.triggered.connect(lambda: self.select_mode("quiet", user_initiated=True))
         menu.addAction(m_quiet)
 
         m_custom = QAction("Custom Mode", self)
-        m_custom.triggered.connect(lambda: self.select_mode("custom"))
+        m_custom.triggered.connect(lambda: self.select_mode("custom", user_initiated=True))
         menu.addAction(m_custom)
 
         menu.addSeparator()
@@ -1471,6 +1505,9 @@ class FanControlMainWindow(QMainWindow):
             self.slider_f1.blockSignals(False)
 
     def _on_slider_released(self):
+        if not self.backend.has_direct_io and is_kernel_locked_down():
+            self._on_elevate_clicked()
+            return
         val1 = self.slider_f1.value()
         val2 = self.slider_f2.value()
         if self.linked_fans:
@@ -1520,6 +1557,12 @@ class FanControlMainWindow(QMainWindow):
 
         # Do not prompt in automated offscreen headless test environments
         if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+
+        # If kernel lockdown is active due to UEFI Secure Boot, raw port I/O
+        # is strictly forbidden by the kernel regardless of capabilities or root.
+        # Do not prompt for passwords uselessly on startup.
+        if is_kernel_locked_down():
             return
 
         # Security: Only permit capability elevation on verified system-installed binaries
@@ -1585,8 +1628,37 @@ class FanControlMainWindow(QMainWindow):
                 return
 
     def _on_elevate_clicked(self):
+        if is_kernel_locked_down():
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning if hasattr(QMessageBox, "Icon") else QMessageBox.Warning)
+            msg.setWindowTitle("UEFI Secure Boot Active")
+            msg.setText(
+                "<h3>Hardware Fan Control Blocked by Linux Kernel Lockdown</h3>"
+                "<p>Your password was accepted, but the Linux kernel has <b>Kernel Lockdown</b> active "
+                "because <b>UEFI Secure Boot</b> is enabled in your laptop BIOS.</p>"
+                "<p>Under Kernel Lockdown, Linux strictly blocks direct hardware I/O port access "
+                "(<code>ioperm</code> to the Embedded Controller) — even for <code>root</code> / administrator.</p>"
+                "<hr>"
+                "<p><b>How to unlock hardware fan control in BIOS:</b></p>"
+                "<ol>"
+                "<li><b>Reboot</b> your laptop and repeatedly tap <b>F2</b> (or Del) to enter BIOS / UEFI setup.</li>"
+                "<li>Go to the <b>Security</b> tab and choose <b>Set Supervisor Password</b>.<br>"
+                "<i>(Acer laptops lock the Secure Boot toggle until a supervisor password is set. Pick a simple password you will remember!)</i></li>"
+                "<li>Go to the <b>Boot</b> tab (or Security tab), select <b>Secure Boot</b>, and change it to <b>Disabled</b>.</li>"
+                "<li>Press <b>F10</b> (Save & Exit) and boot back into Linux.</li>"
+                "</ol>"
+                "<p>Once Secure Boot is disabled, Fan Control will automatically have full direct hardware control with no extra passwords needed.</p>"
+            )
+            msg.exec()
+            return
+
         self._check_and_prompt_elevation()
         if self.backend.has_direct_io:
+            if hasattr(self, "elevate_btn"):
+                self.elevate_btn.setVisible(False)
+            if hasattr(self, "status_badge"):
+                self.status_badge.setText("● Connected")
+                self._update_badge_style()
             QMessageBox.information(self, "Success", "Direct EC access active.")
         else:
             QMessageBox.warning(self, "Authorization Failed", "Could not acquire raw I/O permissions to the Embedded Controller.")

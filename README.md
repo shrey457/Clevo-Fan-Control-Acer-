@@ -216,6 +216,19 @@ Fan control requires access to the laptop's hardware Embedded Controller (EC) I/
 - Click the **Firmware Reset** button in Custom Mode inside the GUI.
 - Or run `fan-control reset` in terminal.
 
+#### 3. Why does the app show `🔒 Secure Boot Active` / why can't I change fan speeds even after entering my password?
+When **UEFI Secure Boot** is enabled in your BIOS, the Linux kernel automatically enforces **Kernel Lockdown** (`[integrity]` mode in `/sys/kernel/security/lockdown`).
+
+Under Kernel Lockdown, Linux strictly blocks raw hardware port access (`ioperm` / `inb` / `outb` to Embedded Controller ports `0x62`/`0x66`) — even for `root` (UID 0) or binaries with `CAP_SYS_RAWIO`.
+
+**To unlock full fan control (Acer & Clevo laptops):**
+1. **Reboot** and repeatedly tap **F2** (or Del) to enter BIOS / UEFI.
+2. In the **Security** tab, choose **Set Supervisor Password** and set a password. *(Acer BIOS greys out the Secure Boot setting until a supervisor password is set. Choose a simple password you'll remember!)*
+3. In the **Boot** tab (or Security tab), highlight **Secure Boot** and set it to **Disabled**.
+4. Press **F10** (Save & Exit), then boot into Linux.
+
+Once booted without Secure Boot, Kernel Lockdown is lifted, and Fan Control will display **`● Connected`** with full direct hardware fan control.
+
 ---
 
 ## 📄 License

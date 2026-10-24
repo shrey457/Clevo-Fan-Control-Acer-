@@ -54,6 +54,7 @@
 #define GPU_CPU_MAX_DIFF_C     45    /* GPU must be within +/-45°C of CPU to be trusted */
 
 /* --- Prototypes --- */
+static int     is_kernel_locked_down(void);
 static int     ec_init(void);
 static int     ec_io_wait(unsigned short port, uint8_t flag, uint8_t value);
 static int     ec_io_read(uint8_t reg);
@@ -111,7 +112,15 @@ int main(int argc, char *argv[]) {
     }
 
     if (ec_init() != 0) {
-        fprintf(stderr, "EC init failed: %s (requires root or cap_sys_rawio)\n", strerror(errno));
+        if (is_kernel_locked_down()) {
+            fprintf(stderr,
+                "EC init failed: Kernel lockdown active due to UEFI Secure Boot (raw I/O blocked).\n"
+                "Linux blocks direct I/O port access (ioperm) when Secure Boot is enabled.\n"
+                "To control fans, please disable Secure Boot in your UEFI BIOS settings.\n"
+                "(See 'man kernel_lockdown.7' or project README for instructions).\n");
+        } else {
+            fprintf(stderr, "EC init failed: %s (requires root or cap_sys_rawio)\n", strerror(errno));
+        }
         return EXIT_FAILURE;
     }
 
@@ -386,6 +395,20 @@ static int sanitize_gpu_temp(int gpu_c, int cpu_c) {
 }
 
 /* ---------------------- EC access ----------------------- */
+
+static int is_kernel_locked_down(void) {
+    FILE *f = fopen("/sys/kernel/security/lockdown", "r");
+    if (!f) return 0;
+    char buf[128] = {0};
+    int locked = 0;
+    if (fgets(buf, sizeof(buf), f)) {
+        if (strstr(buf, "[integrity]") || strstr(buf, "[confidentiality]")) {
+            locked = 1;
+        }
+    }
+    fclose(f);
+    return locked;
+}
 
 static int ec_init(void) {
     if (ioperm(EC_DATA, 1, 1) != 0) return -1;
